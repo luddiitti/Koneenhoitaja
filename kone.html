@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kuorituskone-peli Web</title>
+  <style>
+    body { margin:0; background:#e6e6e6; font-family: Arial, sans-serif; }
+    #gameCanvas { display:block; margin:0 auto; background:#e6e6e6; }
+    #controls { text-align:center; margin:10px; }
+    button { padding:8px 16px; margin:0 5px; font-size:16px; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <button id="startBtn">Aloita</button>
+    <button id="resetBtn">Nollaa</button>
+  </div>
+  <canvas id="gameCanvas" width="800" height="400"></canvas>
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    let running = false;
+    let errorMessage = '';
+
+    // Config
+    const WIDTH = canvas.width;
+    const HEIGHT = canvas.height;
+    const beltY = HEIGHT/2;
+    const beltH = 40;
+    const machineX = WIDTH/2;
+    const speed = 0.1;
+
+    // Max belts before stop
+    const maxBeltEnvelopes = 10;
+
+    // Rack positions
+    const paperRack = { x:50, y:beltY-80, w:70, h:100, stock:20 };
+    const envelopeRack = { x:WIDTH-150, y:beltY-80, w:70, h:100, stock:10 };
+
+    // Inputs and states
+    let paperInputs = [];
+    let envelopeInputs = [];
+    let beltEnvelopes = [];
+
+    // Box & roller
+    const box = { x:20, y:beltY + beltH/2 + 50, w:100, h:100, capacity:16, contents:[], moving:false, moveX:20 };
+    const rollerY = box.y + 120;
+    const rollerH = 20;
+
+    // Simulation state
+    let spawnInterval = 2000, sealTime = 1000;
+    let lastSpawn = 0;
+
+    // Controls
+    const startBtn = document.getElementById('startBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    startBtn.addEventListener('click', ()=>{
+      if (!running) {
+        errorMessage = '';
+        startBtn.textContent = 'Stoppa';
+      } else {
+        startBtn.textContent = 'Aloita';
+      }
+      running = !running;
+    });
+    resetBtn.addEventListener('click', ()=>{
+      running = false;
+      startBtn.textContent = 'Aloita';
+      paperRack.stock = 20;
+      envelopeRack.stock = 10;
+      paperInputs = []; envelopeInputs = []; beltEnvelopes = [];
+      box.contents = []; box.moving = false; box.moveX = box.x;
+      lastSpawn = 0;
+      errorMessage = '';
+    });
+
+    // Canvas clicks for racks and belt envelopes
+    canvas.addEventListener('click', e=>{
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      if(mx>=paperRack.x && mx<=paperRack.x+paperRack.w && my>=paperRack.y && my<=paperRack.y+paperRack.h) paperRack.stock++;
+      else if(mx>=envelopeRack.x && mx<=envelopeRack.x+envelopeRack.w && my>=envelopeRack.y && my<=envelopeRack.y+envelopeRack.h) envelopeRack.stock++;
+      else {
+        beltEnvelopes.some((_, idx)=>{
+          const ex = envelopeRack.x+80+(idx%5)*35;
+          const ey = beltY + beltH/2 +10 + Math.floor(idx/5)*25;
+          if(mx>=ex && mx<=ex+40 && my>=ey && my<=ey+25){
+            beltEnvelopes.splice(idx,1);
+            box.contents.push(1);
+            if(box.contents.length>=box.capacity){
+              box.moving = true; box.moveX = box.x;
+            }
+            return true;
+          }
+        });
+      }
+    });
+
+    // Draw machine path inside
+    function drawMachinePath(){
+      ctx.strokeStyle = 'orange'; ctx.lineWidth = 3;
+      ctx.setLineDash([10,5]);
+      ctx.beginPath();
+      ctx.moveTo(machineX-20, beltY);
+      ctx.lineTo(machineX-20, beltY-60);
+      ctx.lineTo(machineX+20, beltY-60);
+      ctx.lineTo(machineX+20, beltY);
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+
+    function update(dt){
+      // Stop if too many envelopes waiting
+      if(beltEnvelopes.length >= maxBeltEnvelopes){
+        errorMessage = 'Liikaa kuoria hihnalla!'; running = false;
+        startBtn.textContent = errorMessage;
+        return;
+      }
+      // Move box
+      if(box.moving){ box.moveX += dt*speed; if(box.moveX > WIDTH){ box.moving = false; box.contents = []; }}
+      if(!running) return;
+
+      // Spawn new form and envelope in sync
+      lastSpawn += dt;
+      if(lastSpawn >= spawnInterval){
+        lastSpawn = 0;
+        if(paperRack.stock > 0 && envelopeRack.stock > 0){
+          paperInputs.push({ x: paperRack.x+paperRack.w, y: beltY, state:'moving', timer:0 });
+          envelopeInputs.push({ x: envelopeRack.x, y: beltY, state:'moving' });
+          paperRack.stock--; envelopeRack.stock--;
+        } else if(paperRack.stock <= 0) {
+          errorMessage = 'Ei paperia!'; running = false;
+          startBtn.textContent = errorMessage;
+          return;
+        } else {
+          errorMessage = 'Ei kuoria!'; running = false;
+          startBtn.textContent = errorMessage;
+          return;
+        }
+      }
+      // Update inputs
+      paperInputs.forEach((p,i)=>{
+        p.x += dt*speed;
+        if(p.x >= machineX-20 && p.state === 'moving') p.state = 'sealing';
+        if(p.state === 'sealing'){
+          p.timer += dt;
+          if(p.timer >= sealTime){ p.state = 'finished'; }
+        }
+        if(p.state === 'finished'){ beltEnvelopes.push(1); paperInputs.splice(i,1); }
+      });
+      envelopeInputs.forEach((e,i)=>{
+        e.x += dt*speed;
+        if(e.x >= machineX+20){ envelopeInputs.splice(i,1); }
+      });
+    }
+
+    function draw(){
+      ctx.clearRect(0,0,WIDTH,HEIGHT);
+      // belt and roller
+      ctx.fillStyle='#646464'; ctx.fillRect(0,beltY-beltH/2,WIDTH,beltH);
+      ctx.fillRect(0,rollerY-rollerH/2,WIDTH,rollerH);
+      drawMachinePath();
+
+      // machine body
+      ctx.strokeStyle='#969696'; ctx.strokeRect(machineX-50,beltY-80,100,160);
+      ctx.fillStyle='#000'; ctx.fillText('Kuorituskone', machineX-20,beltY-100);
+
+      // racks
+      ctx.strokeStyle='#000'; ctx.strokeRect(paperRack.x,paperRack.y,paperRack.w,paperRack.h);
+      ctx.fillText('Paperiteline',paperRack.x,paperRack.y-10);
+      drawStock(paperRack,'paper');
+      ctx.strokeRect(envelopeRack.x,envelopeRack.y,envelopeRack.w,envelopeRack.h);
+      ctx.fillText('Kuoriteline',envelopeRack.x,envelopeRack.y-10);
+      drawStock(envelopeRack,'envelope');
+
+      // draw inputs
+      paperInputs.forEach(p=>{ ctx.fillStyle='#fff'; ctx.fillRect(p.x,p.y-10,20,15); ctx.strokeRect(p.x,p.y-10,20,15); });
+      envelopeInputs.forEach(e=>{ ctx.fillStyle='#c8c8e6'; ctx.fillRect(e.x,e.y-10,30,20); ctx.strokeRect(e.x,e.y-10,30,20); });
+
+      // belt envelopes
+      beltEnvelopes.forEach((_,i)=> drawEnvelope(envelopeRack.x+80+(i%5)*35, beltY+beltH/2+10+Math.floor(i/5)*25));
+
+      // box
+      ctx.strokeRect(box.moving?box.moveX:box.x,box.y,box.w,box.h);
+      ctx.fillText('Laatikko',box.x,box.y-10);
+      box.contents.forEach((_,i)=> drawEnvelope((box.moving?box.moveX:box.x)+5+(i%4)*24,box.y+5+Math.floor(i/4)*30));
+
+      // error
+      if(errorMessage){ ctx.fillStyle='red'; ctx.font='20px Arial'; const w=ctx.measureText(errorMessage).width;
+        ctx.fillText(errorMessage,(WIDTH-w)/2,50);
+      }
+    }
+
+    function drawStock(rack,type){ for(let i=0;i<rack.stock;i++){ const x=rack.x+(i%(type==='paper'?5:3))*(type==='paper'?12:22)+5;
+        const y=rack.y+Math.floor(i/(type==='paper'?5:3))*(type==='paper'?20:25)+5;
+        if(type==='paper'){ ctx.fillStyle='#fff'; ctx.fillRect(x,y,20,15); ctx.strokeRect(x,y,20,15); }
+        else{ ctx.fillStyle='#c8c8e6'; ctx.fillRect(x,y,30,20); ctx.strokeRect(x,y,30,20); }} }
+    function drawEnvelope(x,y){ ctx.fillStyle='#c8c8e6'; ctx.fillRect(x,y,40,25); ctx.strokeStyle='#000'; ctx.beginPath();
+      ctx.moveTo(x,y); ctx.lineTo(x+20,y+10); ctx.lineTo(x+40,y); ctx.stroke(); }
+
+    let last = performance.now(); function loop(){ const now=performance.now(), dt=now-last; update(dt); draw(); last=now; requestAnimationFrame(loop); }
+    loop();
+  </script>
+</body>
+</html>
