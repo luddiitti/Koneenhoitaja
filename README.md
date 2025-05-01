@@ -1,2 +1,2 @@
 # Koneenhoitaja
-js-peli
+js-peli ChatGPT-o4-mini-high
